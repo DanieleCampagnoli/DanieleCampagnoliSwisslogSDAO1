@@ -37,7 +37,7 @@ class DatasetConverter:
             x, y = map(int, lines[idx].split())
 
             coord = SwarmManagerCoordinate(x, y)
-            obstacle = SwarmManagerObstacle(coord)
+            obstacle = SwarmManagerObstacle(idx,coord)
 
             obstacles.append(obstacle)
             idx += 1
@@ -55,6 +55,7 @@ class DatasetConverter:
 
             # ✅ initial position = start
             robot = SwarmManagerRobot(
+                robotId=idx,
                 startingPoint=start,
                 destinationPoint=dest,
                 currentPosition=start
