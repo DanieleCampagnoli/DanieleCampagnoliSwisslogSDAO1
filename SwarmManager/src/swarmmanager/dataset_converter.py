@@ -2,16 +2,16 @@ from swarmmanager.bo import (
     SwarmManagerCoordinate,
     SwarmManagerObstacle,
     SwarmManagerRobot,
-    SwarmManagerWharehouse
+    SwarmManagerWarehouse
 )
 
 
 class DatasetConverter:
 
     @staticmethod
-    def from_file(file_path: str) -> SwarmManagerWharehouse:
+    def from_file(file_path: str) -> SwarmManagerWarehouse:
         """
-        Parse dataset_A.in file and return a fully populated SwarmManagerWharehouse object
+        Parse dataset_A.in file and return a fully populated SwarmManagerWarehouse object
         """
 
         # --- read and clean lines (ignore empty + comments) ---
@@ -65,7 +65,7 @@ class DatasetConverter:
             idx += 1
 
         # --- 4. Build final warehouse object ---
-        warehouse = SwarmManagerWharehouse(
+        warehouse = SwarmManagerWarehouse(
             maxX=maxX,
             maxY=maxY,
             obstacles=obstacles,
