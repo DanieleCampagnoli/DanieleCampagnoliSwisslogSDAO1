@@ -1,26 +1,32 @@
-import tkinter as tk
-import random
+from swarmmanager.dataset_converter import DatasetConverter
+from swarmmanager.constants import DATASET_A_IN_FILE
+from swarmmanager.bo import init_db
+from swarmmanager.bo import clean_db
+from swarmmanager.bo import SwarmManagerWarehouse
+from swarmmanager.bo import SwarmManagerRobotMovementLog
+from swarmmanager.visualization import SwarmManagerVisualization
 
-SIZE = 50
-ROWS, COLS = 10, 10
 
-root = tk.Tk()
-canvas = tk.Canvas(root, width=COLS*SIZE, height=ROWS*SIZE)
-canvas.pack()
 
-x, y = 0, 0
-rect = canvas.create_rectangle(0, 0, SIZE, SIZE, fill="red")
 
-def move():
-    global x, y
-    dx = random.choice([-1, 0, 1])
-    dy = random.choice([-1, 0, 1])
+def main():
+    clean_db("db/swarm.db")
+    warehouse = DatasetConverter.from_file(DATASET_A_IN_FILE)
+    Session = init_db("sqlite:///db/swarm.db")
+    session = Session()
+    # Save everything
+    session.add(warehouse)
+    session.commit() 
+    # save a log for every robot with initial position
+    for  robot in warehouse.robots:
+         log = SwarmManagerRobotMovementLog(1,robot,robot.startingPoint)
+         session.add(log)
+         session.commit() 
+    #inline lambda function to query the db
+    mlQuery= lambda iteration_number:session.query(SwarmManagerRobotMovementLog).filter(SwarmManagerRobotMovementLog.iterationNumber == iteration_number).all()
+    # create and start the visu
+    visu=SwarmManagerVisualization(100,warehouse.maxX,warehouse.maxY,mlQuery)
+    visu.start_visu(warehouse)
 
-    x = (x + dx) % COLS
-    y = (y + dy) % ROWS
-
-    canvas.coords(rect, x*SIZE, y*SIZE, (x+1)*SIZE, (y+1)*SIZE)
-    root.after(1000, move)
-
-move()
-root.mainloop()
+if __name__ == "__main__":
+    main()

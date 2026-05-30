@@ -71,5 +71,5 @@ class DatasetConverter:
             obstacles=obstacles,
             robots=robots
         )
-
+        
         return warehouse
