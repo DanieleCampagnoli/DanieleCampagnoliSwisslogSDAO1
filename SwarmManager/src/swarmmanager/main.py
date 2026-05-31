@@ -25,7 +25,7 @@ def main():
     #inline lambda function to query the db
     mlQuery= lambda iteration_number:session.query(SwarmManagerRobotMovementLog).filter(SwarmManagerRobotMovementLog.iterationNumber == iteration_number).all()
     # create and start the visu
-    visu=SwarmManagerVisualization(100,warehouse.maxX,warehouse.maxY,mlQuery)
+    visu=SwarmManagerVisualization(50,warehouse.maxX,warehouse.maxY,mlQuery)
     visu.start_visu(warehouse)
 
 if __name__ == "__main__":

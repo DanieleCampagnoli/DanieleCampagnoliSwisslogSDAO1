@@ -6,3 +6,4 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DATASET_A_IN_FILE = PROJECT_ROOT / "files" / "in" / "dataset_A.in"
 DATASET_B_IN_FILE = PROJECT_ROOT / "files" / "in" / "dataset_B.in"
+DATASET_C_IN_FILE = PROJECT_ROOT / "files" / "in" / "dataset_C.in"
