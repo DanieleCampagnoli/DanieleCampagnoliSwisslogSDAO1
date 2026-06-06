@@ -1,9 +1,12 @@
 from swarmmanager.dataset_converter import DatasetConverter
 from swarmmanager.constants import DATASET_A_IN_FILE
+from swarmmanager.constants import DATASET_B_IN_FILE
+from swarmmanager.constants import DATASET_C_IN_FILE
 from swarmmanager.bo import init_db
 from swarmmanager.bo import clean_db
 from swarmmanager.bo import SwarmManagerWarehouse
 from swarmmanager.bo import SwarmManagerRobotMovementLog
+from swarmmanager.bo import SwarmManagerCoordinate
 from swarmmanager.visualization import SwarmManagerVisualization
 from swarmmanager.planner import ORToolsPlanner
 
@@ -53,9 +56,15 @@ def run_planner(warehouse:SwarmManagerWarehouse,session):
        robot= sorted_list_of_robots[robotInd]
        movementInd=2
        for movement in path:
-         log = SwarmManagerRobotMovementLog(movementInd,robot,robot.startingPoint)
+         #log the movement
+         nextPosition= SwarmManagerCoordinate(movement[0], movement[1])
+         log = SwarmManagerRobotMovementLog(movementInd,robot,nextPosition)
          session.add(log)
          session.commit()
+         #move the robot 
+         robot.currentPosition=nextPosition  
+         session.add(robot)  
+         session.commit()  
          movementInd+=1 
        robotInd+=1
     print(f"saved  {len(paths)} paths on the movement log")
