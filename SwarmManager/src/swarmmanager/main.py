@@ -9,7 +9,7 @@ from swarmmanager.bo import SwarmManagerRobotMovementLog
 from swarmmanager.bo import SwarmManagerCoordinate
 from swarmmanager.visualization import SwarmManagerVisualization
 from swarmmanager.planner import ORToolsPlanner
-
+from swarmmanager.planner_v5 import ORToolsPlannerV5
 
 
 def main():
@@ -26,14 +26,14 @@ def main():
          session.add(log)
          session.commit()
     # plan the movements
-    run_planner(warehouse,session)      
+    run_planner_v5(warehouse,session)      
     #inline lambda function to query the db
     mlQuery= lambda iteration_number:session.query(SwarmManagerRobotMovementLog).filter(SwarmManagerRobotMovementLog.iterationNumber == iteration_number).all()
     # create and start the visu
     visu=SwarmManagerVisualization(50,warehouse.maxX,warehouse.maxY,mlQuery)
     visu.start_visu(warehouse)
 
-def run_planner(warehouse:SwarmManagerWarehouse,session):
+def run_planner_v1(warehouse:SwarmManagerWarehouse,session):
     
     obstacles=[]
     for obs in warehouse.obstacles:
@@ -68,6 +68,43 @@ def run_planner(warehouse:SwarmManagerWarehouse,session):
          movementInd+=1 
        robotInd+=1
     print(f"saved  {len(paths)} paths on the movement log")
+
+def run_planner_v5(warehouse:SwarmManagerWarehouse,session):
+    
+    obstacles=[]
+    for obs in warehouse.obstacles:
+        obstacles.append((int(obs.coordinate.x),int(obs.coordinate.y)))
+    
+    agents= []
+    sorted_list_of_robots = sorted(warehouse.robots, key=lambda x: x.robotId)
+    for robot in sorted_list_of_robots:
+         agents.append({"start": (int(robot.startingPoint.x),int(robot.startingPoint.y)), "goal": (int(robot.destinationPoint.x),int(robot.destinationPoint.y))})
+
+    planner = ORToolsPlannerV5(
+        grid_size=(warehouse.maxX,warehouse.maxY),
+        obstacles=obstacles
+    )
+
+    paths = planner.plan(agents,500)
+
+    print(f"problem solved with  {len(paths)} paths")  
+
+    robotInd=0  
+    for path in paths:
+       robot= sorted_list_of_robots[robotInd]
+       movementInd=2
+       for movement in path:
+         #log the movement
+         nextPosition= SwarmManagerCoordinate(movement[0], movement[1])
+         log = SwarmManagerRobotMovementLog(movementInd,robot,nextPosition)
+         session.add(log)
+         #move the robot 
+         robot.currentPosition=nextPosition  
+         session.add(robot)  
+         movementInd+=1 
+       robotInd+=1
+    session.commit()     
+    print(f"saved  {len(paths)} paths on the movement log")    
 
 if __name__ == "__main__":
     main()
