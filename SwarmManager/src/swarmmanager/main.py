@@ -14,7 +14,7 @@ from swarmmanager.planner import ORToolsPlanner
 
 def main():
     clean_db("db/swarm.db")
-    warehouse = DatasetConverter.from_file(DATASET_A_IN_FILE)
+    warehouse = DatasetConverter.from_file(DATASET_B_IN_FILE)
     Session = init_db("sqlite:///db/swarm.db")
     session = Session()
     # Save everything

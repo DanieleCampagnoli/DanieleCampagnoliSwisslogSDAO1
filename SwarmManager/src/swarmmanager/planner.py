@@ -1,33 +1,60 @@
 from ortools.sat.python import cp_model
 
 
+from ortools.sat.python import cp_model
+
+
 def plan_paths(grid_size, obstacles, starts, goals, max_time=None):
     model = cp_model.CpModel()
 
     num_agents = len(starts)
     width, height = grid_size
 
-    # ✅ better horizon
     if max_time is None:
         max_time = width + height
 
     x = {}
     y = {}
+    move = {}
+    reached = {}
+    arrival_time = {}
 
     # ================= VARIABLES =================
     for a in range(num_agents):
         for t in range(max_time):
             x[a, t] = model.NewIntVar(0, width - 1, f"x_{a}_{t}")
             y[a, t] = model.NewIntVar(0, height - 1, f"y_{a}_{t}")
+            reached[a, t] = model.NewBoolVar(f"reached_{a}_{t}")
 
-    # ================= START + GOAL =================
+        for t in range(max_time - 1):
+            move[a, t] = model.NewBoolVar(f"move_{a}_{t}")
+
+        arrival_time[a] = model.NewIntVar(0, max_time - 1, f"arrival_{a}")
+
+    # ================= START =================
     for a in range(num_agents):
         model.Add(x[a, 0] == starts[a][0])
         model.Add(y[a, 0] == starts[a][1])
 
-        # force goal at last step
-        model.Add(x[a, max_time - 1] == goals[a][0])
-        model.Add(y[a, max_time - 1] == goals[a][1])
+    # ================= GOAL (flexible) =================
+    for a in range(num_agents):
+        gx, gy = goals[a]
+
+        for t in range(max_time):
+            model.Add(x[a, t] == gx).OnlyEnforceIf(reached[a, t])
+            model.Add(y[a, t] == gy).OnlyEnforceIf(reached[a, t])
+
+        # must reach goal at least once
+        model.Add(sum(reached[a, t] for t in range(max_time)) >= 1)
+
+        # once reached, always reached
+        for t in range(max_time - 1):
+            model.Add(reached[a, t] <= reached[a, t+1])
+
+        # arrival time = first time reached
+        model.Add(
+            arrival_time[a] == sum(t * reached[a, t] for t in range(max_time))
+        )
 
     # ================= MOVEMENT =================
     for a in range(num_agents):
@@ -44,8 +71,15 @@ def plan_paths(grid_size, obstacles, starts, goals, max_time=None):
             model.AddAbsEquality(abs_dx, dx)
             model.AddAbsEquality(abs_dy, dy)
 
-            # ✅ no diagonal moves, no jumps
+            # no diagonal, no jumps
             model.Add(abs_dx + abs_dy <= 1)
+
+            # movement detection
+            model.Add(abs_dx + abs_dy == 1).OnlyEnforceIf(move[a, t])
+            model.Add(abs_dx + abs_dy == 0).OnlyEnforceIf(move[a, t].Not())
+
+            # 💡 important: after reaching goal -> no movement
+            model.Add(move[a, t] == 0).OnlyEnforceIf(reached[a, t])
 
     # ================= OBSTACLES =================
     if obstacles:
@@ -72,9 +106,10 @@ def plan_paths(grid_size, obstacles, starts, goals, max_time=None):
 
                 same_cell = model.NewBoolVar(f"same_cell_{i}_{j}_{t}")
                 model.AddBoolAnd([same_x, same_y]).OnlyEnforceIf(same_cell)
-                model.AddBoolOr([same_x.Not(), same_y.Not()]).OnlyEnforceIf(same_cell.Not())
+                model.AddBoolOr(
+                    [same_x.Not(), same_y.Not()]
+                ).OnlyEnforceIf(same_cell.Not())
 
-                # ✅ forbid same cell
                 model.Add(same_cell == 0)
 
     # ================= EDGE COLLISIONS =================
@@ -84,7 +119,6 @@ def plan_paths(grid_size, obstacles, starts, goals, max_time=None):
 
                 a_to_b_x = model.NewBoolVar(f"a_to_b_x_{i}_{j}_{t}")
                 a_to_b_y = model.NewBoolVar(f"a_to_b_y_{i}_{j}_{t}")
-
                 b_to_a_x = model.NewBoolVar(f"b_to_a_x_{i}_{j}_{t}")
                 b_to_a_y = model.NewBoolVar(f"b_to_a_y_{i}_{j}_{t}")
 
@@ -107,15 +141,24 @@ def plan_paths(grid_size, obstacles, starts, goals, max_time=None):
                 ).OnlyEnforceIf(swap)
 
                 model.AddBoolOr(
-                    [a_to_b_x.Not(), a_to_b_y.Not(), b_to_a_x.Not(), b_to_a_y.Not()]
+                    [a_to_b_x.Not(), a_to_b_y.Not(),
+                     b_to_a_x.Not(), b_to_a_y.Not()]
                 ).OnlyEnforceIf(swap.Not())
 
-                # ✅ forbid swap
                 model.Add(swap == 0)
+
+    # ================= OBJECTIVE =================
+    model.Minimize(
+        1000 * sum(arrival_time[a] for a in range(num_agents)) +
+        sum((t + 1) * move[a, t]
+            for a in range(num_agents)
+            for t in range(max_time - 1))
+    )
 
     # ================= SOLVE =================
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 5
+    solver.parameters.max_time_in_seconds = 300
+    solver.parameters.num_search_workers = 8
 
     result = solver.Solve(model)
 
