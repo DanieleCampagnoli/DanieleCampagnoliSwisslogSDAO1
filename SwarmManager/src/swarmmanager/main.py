@@ -10,9 +10,16 @@ from swarmmanager.bo import SwarmManagerCoordinate
 from swarmmanager.visualization import SwarmManagerVisualization
 from swarmmanager.planner import ORToolsPlanner
 from swarmmanager.planner_v5 import ORToolsPlannerV5
-
+from swarmmanager.planner_v6 import HierarchicalPlanner
+import logging.config
+import yaml
 
 def main():
+    # logging conf
+    with open("logging.yaml", "r") as f:
+        config = yaml.safe_load(f)
+        logging.config.dictConfig(config)
+    #setup db
     clean_db("db/swarm.db")
     warehouse = DatasetConverter.from_file(DATASET_B_IN_FILE)
     Session = init_db("sqlite:///db/swarm.db")
@@ -26,7 +33,7 @@ def main():
          session.add(log)
          session.commit()
     # plan the movements
-    run_planner_v5(warehouse,session)      
+    run_planner_v6(warehouse,session)      
     #inline lambda function to query the db
     mlQuery= lambda iteration_number:session.query(SwarmManagerRobotMovementLog).filter(SwarmManagerRobotMovementLog.iterationNumber == iteration_number).all()
     # create and start the visu
@@ -69,7 +76,7 @@ def run_planner_v1(warehouse:SwarmManagerWarehouse,session):
        robotInd+=1
     print(f"saved  {len(paths)} paths on the movement log")
 
-def run_planner_v5(warehouse:SwarmManagerWarehouse,session):
+def run_planner_v6(warehouse:SwarmManagerWarehouse,session):
     
     obstacles=[]
     for obs in warehouse.obstacles:
@@ -80,14 +87,14 @@ def run_planner_v5(warehouse:SwarmManagerWarehouse,session):
     for robot in sorted_list_of_robots:
          agents.append({"start": (int(robot.startingPoint.x),int(robot.startingPoint.y)), "goal": (int(robot.destinationPoint.x),int(robot.destinationPoint.y))})
 
-    planner = ORToolsPlannerV5(
+    planner = HierarchicalPlanner(
         grid_size=(warehouse.maxX,warehouse.maxY),
         obstacles=obstacles
     )
 
-    paths = planner.plan(agents,500)
+    success,paths = planner.plan(agents,500)
 
-    print(f"problem solved with  {len(paths)} paths")  
+    print(f"problem solved {success} with  {len(paths)} paths")  
 
     robotInd=0  
     for path in paths:

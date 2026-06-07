@@ -1,7 +1,10 @@
 from ortools.sat.python import cp_model
 from collections import defaultdict
 import heapq
-
+import logging
+# logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # =====================================================
 # LOCAL CP-SAT
@@ -127,7 +130,7 @@ class HierarchicalPlanner:
         self.obstacles = obstacles
 
     def plan(self, agents, steps=300):
-
+        plan_successful=False   
         current = [dict(a) for a in agents]
         paths = [[a["start"]] for a in agents]
 
@@ -136,8 +139,12 @@ class HierarchicalPlanner:
         stuck = {i: 0 for i in range(len(agents))}
 
         priority = list(range(len(agents)))
-
+        step_nr=0   
         for _ in range(steps):
+            logger.info(f"{step_nr}-PLAN STATE######### ")
+            logger.info(f"*****current*****")
+            logger.info(f"{current}")
+            step_nr+=1
 
             update_congestion([a["start"] for a in current])
 
@@ -171,6 +178,10 @@ class HierarchicalPlanner:
 
                 proposals[i] = proposed
 
+                logger.debug(
+                    f"[PROPOSE] Agent {i} pos={pos} -> proposed={proposed} goal={goal} stuck={stuck[i]}"
+                )
+
             # =====================================================
             # PHASE 2: STRICT GLOBAL RESOLUTION
             # =====================================================
@@ -192,6 +203,8 @@ class HierarchicalPlanner:
                     cell_to_agents[p].append(i)
 
             for cell, agents_here in cell_to_agents.items():
+                if len(agents_here) > 1:
+                    logger.debug(f"[CONFLICT] Cell {cell} requested by agents {agents_here}")
 
                 # block entering occupied cell
                 if cell in reserved:
@@ -229,12 +242,37 @@ class HierarchicalPlanner:
 
                 current[i]["start"] = move
                 paths[i].append(move)
+                
+                prev = paths[i][-2]
+                curr = paths[i][-1]
+
+                if prev == curr:
+                    logger.debug(f"[WAIT] Agent {i} stayed at {curr}")
+                else:
+                    logger.debug(f"[MOVE] Agent {i} {prev} -> {curr}")
+
+            # log number of moves,  If it becomes 0 → hard deadlock
+            if len(paths[0]) > 1:
+                moves = sum(
+                1 for i in range(len(agents))
+                    if paths[i][-1] != paths[i][-2]
+                )
+            logger.info(f"Moves this step: {moves}")
+            # stuck agents  
+            stuck_agents = [i for i in range(len(agents)) if stuck[i] >= 3]
+            logger.info(f"Stuck agents count: {len(stuck_agents)}")
+            
+            for i in range(len(agents)):
+                if stuck[i] >= 3:
+                    logger.warning(
+                        f"[STUCK] Agent {i} at {current[i]['start']} goal={agents[i]['goal']} stuck={stuck[i]}"
+                    )
 
             # fairness rotation
             priority = priority[1:] + priority[:1]
 
             if all(current[i]["start"] == agents[i]["goal"]
                    for i in range(len(agents))):
+                plan_successful=True
                 break
-
-        return paths
+        return plan_successful,paths
