@@ -1,0 +1,1 @@
+./main.exe -m test.map -i scen.scen -N 2 -o output.txt
