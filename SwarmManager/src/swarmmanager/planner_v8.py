@@ -2,6 +2,8 @@ import heapq
 import os
 import time
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+import random
 
 
 # =====================================================
@@ -15,7 +17,6 @@ def dijkstra(graph, start, goal):
 
     while pq:
         d, u = heapq.heappop(pq)
-
         if u == goal:
             break
 
@@ -46,15 +47,12 @@ def build_subgrid_graph(nx, ny):
     graph = {}
     for x in range(nx):
         for y in range(ny):
-
             neighbors = []
             for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
                 xx, yy = x + dx, y + dy
                 if 0 <= xx < nx and 0 <= yy < ny:
                     neighbors.append((xx, yy))
-
             graph[(x,y)] = neighbors
-
     return graph
 
 
@@ -85,7 +83,6 @@ class LaCAMPlanner:
         return True, sol
 
     def _run_once(self, grid, agents):
-
         tmpdir = os.path.join(self.tmp_root, f"tmp_{time.time_ns()}")
         os.makedirs(tmpdir, exist_ok=True)
 
@@ -93,7 +90,6 @@ class LaCAMPlanner:
         scen_file = os.path.join(tmpdir, "scen.scen")
         out_file = os.path.join(tmpdir, "out.txt")
 
-        # write map
         with open(map_file, "w") as f:
             f.write("type octile\n")
             f.write(f"height {len(grid)}\n")
@@ -102,7 +98,6 @@ class LaCAMPlanner:
             for row in grid:
                 f.write(row + "\n")
 
-        # write scenario
         with open(scen_file, "w") as f:
             f.write("version 1\n")
             for i, ((sx,sy),(gx,gy)) in enumerate(agents):
@@ -145,14 +140,12 @@ class LaCAMPlanner:
 
                 parts = line.split(":")[1].split("),")
                 step = []
-
                 for p in parts:
                     p = p.replace("(", "").replace(")", "").strip()
                     if not p:
                         continue
                     x, y = map(int, p.split(","))
                     step.append((x,y))
-
                 timesteps.append(step)
 
         if not timesteps:
@@ -169,17 +162,17 @@ class LaCAMPlanner:
 
 
 # =====================================================
-# HIERARCHICAL PLANNER WITH PRIORITY
+# HIERARCHICAL PLANNER
 # =====================================================
 
 class HierarchicalLaCAM:
 
     def __init__(self, grid_size, obstacles, exe_path,
-                 sub_size=(20,20), max_agents=5000):
+                 sub_size=(20,20), max_agents=5000,
+                 deterministic=False, seed=42, max_workers=4):
 
         self.W, self.H = grid_size
         self.SUB_W, self.SUB_H = sub_size
-
         self.obstacles = set(obstacles)
 
         self.NX = self.W // self.SUB_W
@@ -203,10 +196,15 @@ class HierarchicalLaCAM:
         else:
             self.exe_path = exe_path
 
-        self.exe_path = exe_path
-
-        self.reserved = {}   # (x,y,t) → rid
+        self.reserved = {}
         self.age = [0]*max_agents
+
+        self.deterministic = deterministic
+        self.random = random.Random(seed)
+
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+
+        self.conflict_heat = {}
 
     # -------------------------------------
 
@@ -236,6 +234,8 @@ class HierarchicalLaCAM:
             return True
 
         other = self.reserved[key]
+
+        self.conflict_heat[(x,y)] = self.conflict_heat.get((x,y), 0) + 1
 
         if priorities.get(rid, 0) > priorities.get(other, -1e9):
             self.reserved[key] = rid
@@ -281,13 +281,11 @@ class HierarchicalLaCAM:
         x0,y0,x1,y1 = self.bounds(sg)
         obs = set()
 
-        # static obstacles
         for (x,y) in self.obstacles:
             if x0 <= x < x1 and y0 <= y < y1:
                 obs.add((x-x0, y-y0))
 
-        # time-reserved obstacles
-        for (x,y,tt), rid in self.reserved.items():
+        for (x,y,tt), _ in self.reserved.items():
             if t <= tt < t + horizon:
                 if x0 <= x < x1 and y0 <= y < y1:
                     obs.add((x-x0, y-y0))
@@ -296,14 +294,33 @@ class HierarchicalLaCAM:
 
     # -------------------------------------
 
+    def solve_subgrid(self, sg, local_agents, step):
+        planner = LaCAMPlanner(
+            (self.SUB_W,self.SUB_H),
+            self.local_obstacles(sg, step),
+            self.exe_path
+        )
+
+        for _ in range(2):
+            ok, paths = planner.plan(local_agents)
+            if ok:
+                return True, paths
+
+        return False, None
+
+    # -------------------------------------
+
     def plan(self, agents):
 
-        # HIGH LEVEL
         sg_paths = []
         for a in agents:
-            s = self.locate(a["start"])
-            g = self.locate(a["goal"])
-            sg_paths.append(dijkstra(self.graph, s, g))
+            sg_paths.append(
+                dijkstra(
+                    self.graph,
+                    self.locate(a["start"]),
+                    self.locate(a["goal"])
+                )
+            )
 
         global_paths = [[] for _ in agents]
         cur_pos = [a["start"] for a in agents]
@@ -311,18 +328,20 @@ class HierarchicalLaCAM:
 
         max_steps = max(len(p) for p in sg_paths)
 
-        # MAIN LOOP
         for step in range(max_steps):
 
+            moved = set()
             groups = {}
+
             for i,p in enumerate(sg_paths):
                 if step < len(p):
                     sg = p[step]
                     groups.setdefault(sg, []).append(i)
 
+            futures = []
+
             for sg, rids in groups.items():
 
-                # compute priority
                 priorities = {
                     rid: self.compute_priority(
                         rid, cur_pos[rid], agents[rid]["goal"]
@@ -330,7 +349,6 @@ class HierarchicalLaCAM:
                     for rid in rids
                 }
 
-                # sort high → low
                 rids.sort(key=lambda r: priorities[r], reverse=True)
 
                 if len(rids) > 50:
@@ -339,8 +357,6 @@ class HierarchicalLaCAM:
                 x0,y0,x1,y1 = self.bounds(sg)
 
                 local_agents = []
-                idmap = []
-
                 for rid in rids:
                     sx,sy = cur_pos[rid]
                     gx,gy = agents[rid]["goal"]
@@ -352,21 +368,21 @@ class HierarchicalLaCAM:
                         "start": (sx-x0, sy-y0),
                         "goal": (gx-x0, gy-y0)
                     })
-                    idmap.append(rid)
 
-                # run local LaCAM
-                planner = LaCAMPlanner(
-                    (self.SUB_W,self.SUB_H),
-                    self.local_obstacles(sg, step),
-                    self.exe_path
-                )
+                futures.append((sg, rids, priorities,
+                    self.executor.submit(self.solve_subgrid, sg, local_agents, step)
+                ))
 
-                ok, paths = planner.plan(local_agents)
+            for sg, rids, priorities, future in futures:
+
+                ok, paths = future.result()
                 if not ok:
                     continue
 
-                # apply paths
-                for i, rid in enumerate(idmap):
+                x0,y0,_,_ = self.bounds(sg)
+
+                for i, rid in enumerate(rids):
+
                     path = paths[i]
                     success = True
 
@@ -379,9 +395,9 @@ class HierarchicalLaCAM:
                             break
 
                     if not success:
-                        # WAIT (fallback)
                         global_paths[rid].append(cur_pos[rid])
                         time_cur[rid] += 1
+                        moved.add(rid)
                         continue
 
                     for dt,(lx,ly) in enumerate(path):
@@ -390,18 +406,17 @@ class HierarchicalLaCAM:
 
                     time_cur[rid] += len(path)
                     cur_pos[rid] = global_paths[rid][-1]
+                    moved.add(rid)
 
-                # border reservation
-                for rid in idmap:
-                    if step+1 >= len(sg_paths[rid]):
-                        continue
+            # ✅ CRITICAL FIX
+            for rid in range(len(agents)):
+                if rid not in moved:
+                    global_paths[rid].append(cur_pos[rid])
+                    time_cur[rid] += 1
+                    self.age[rid] += 1
 
-                    nxt = sg_paths[rid][step+1]
-                    cells = self.border_cells(sg, nxt)
-
-                    for (x,y) in cells:
-                        self.safe_reserve(
-                            rid, x, y, time_cur[rid], priorities
-                        )
+        for i in range(len(global_paths)):
+            if not global_paths[i]:
+                global_paths[i].append(agents[i]["start"])
 
         return True, global_paths
