@@ -1,6 +1,6 @@
 import unittest
 import random
-
+import logging
 from swarmmanager.planner_v8 import HierarchicalLaCAM  # <-- replace with your file
 
 
@@ -185,6 +185,9 @@ class TestHierarchicalLaCAM(unittest.TestCase):
 
     def test_starvation_prevention(self):
         planner = HierarchicalLaCAM((30,30), [], self.exe_path)
+
+        planner.enable_logging = True
+        planner.logger.setLevel(logging.DEBUG)
 
         # one robot will initially lose priority repeatedly
         agents = [

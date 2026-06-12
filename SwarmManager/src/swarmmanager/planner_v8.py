@@ -4,6 +4,44 @@ import time
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 import random
+import logging
+import json
+from datetime import datetime
+from datetime import datetime, UTC
+
+# =====================================================
+# JSON LOGGER
+# =====================================================
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_record = {
+            "ts": datetime.utcnow().isoformat(),
+            "level": record.levelname,
+            "event": record.getMessage()
+        }
+        if hasattr(record, "extra_data"):
+            log_record.update(record.extra_data)
+        return json.dumps(log_record)
+
+
+def setup_json_logger(level=logging.INFO):
+    logger = logging.getLogger("HierarchicalLaCAM")
+    logger.setLevel(level)
+
+    if not logger.handlers:
+        # file
+        ts = datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
+        log_file=f"planner_log_{ts}.jsonl" 
+        handler = logging.FileHandler(log_file, mode="w")
+        handler.setFormatter(JsonFormatter())
+        logger.addHandler(handler)
+        # console
+        ch = logging.StreamHandler()
+        ch.setFormatter(JsonFormatter())
+        logger.addHandler(handler)
+
+    return logger
 
 
 # =====================================================
@@ -162,7 +200,7 @@ class LaCAMPlanner:
 
 
 # =====================================================
-# HIERARCHICAL PLANNER
+# HIERARCHICAL PLANNER WITH JSON LOGGING
 # =====================================================
 
 class HierarchicalLaCAM:
@@ -206,17 +244,31 @@ class HierarchicalLaCAM:
 
         self.conflict_heat = {}
 
+        # ✅ logging
+        self.logger = setup_json_logger(logging.INFO)
+        self.enable_logging = False  # default OFF
+
+    # -------------------------------------
+
+    def log(self, level, event, **data):
+        if not self.enable_logging:
+            return
+
+        self.logger.log(
+            level,
+            event,
+            extra={"extra_data": data}
+        )
+
     # -------------------------------------
 
     def locate(self, pos):
-        x,y = pos
-        return (x // self.SUB_W, y // self.SUB_H)
+        return (pos[0] // self.SUB_W, pos[1] // self.SUB_H)
 
     def bounds(self, sg):
-        gx,gy = sg
-        x0 = gx * self.SUB_W
-        y0 = gy * self.SUB_H
-        return x0,y0,x0+self.SUB_W,y0+self.SUB_H
+        x0 = sg[0] * self.SUB_W
+        y0 = sg[1] * self.SUB_H
+        return x0, y0, x0+self.SUB_W, y0+self.SUB_H
 
     # -------------------------------------
 
@@ -237,6 +289,10 @@ class HierarchicalLaCAM:
 
         self.conflict_heat[(x,y)] = self.conflict_heat.get((x,y), 0) + 1
 
+        self.log(logging.DEBUG, "conflict",
+                 cell=(x,y), t=t,
+                 winner=rid, loser=other)
+
         if priorities.get(rid, 0) > priorities.get(other, -1e9):
             self.reserved[key] = rid
             self.age[other] += 1
@@ -244,36 +300,6 @@ class HierarchicalLaCAM:
 
         self.age[rid] += 1
         return False
-
-    # -------------------------------------
-
-    def border_cells(self, a, b):
-        x0,y0,x1,y1 = self.bounds(a)
-
-        dx = b[0]-a[0]
-        dy = b[1]-a[1]
-
-        if dx == 1:
-            bx = x1-1
-            cy = (y0+y1)//2
-            return [(bx,cy-1),(bx,cy)]
-
-        if dx == -1:
-            bx = x0
-            cy = (y0+y1)//2
-            return [(bx,cy-1),(bx,cy)]
-
-        if dy == 1:
-            by = y1-1
-            cx = (x0+x1)//2
-            return [(cx-1,by),(cx,by)]
-
-        if dy == -1:
-            by = y0
-            cx = (x0+x1)//2
-            return [(cx-1,by),(cx,by)]
-
-        return []
 
     # -------------------------------------
 
@@ -295,32 +321,33 @@ class HierarchicalLaCAM:
     # -------------------------------------
 
     def solve_subgrid(self, sg, local_agents, step):
+        self.log(logging.DEBUG, "lacam_start",
+                 subgrid=sg, agents=len(local_agents))
+
         planner = LaCAMPlanner(
             (self.SUB_W,self.SUB_H),
             self.local_obstacles(sg, step),
             self.exe_path
         )
 
-        for _ in range(2):
+        for i in range(2):
             ok, paths = planner.plan(local_agents)
             if ok:
                 return True, paths
+            self.log(logging.WARNING, "lacam_retry", subgrid=sg, attempt=i+1)
 
+        self.log(logging.ERROR, "lacam_failed", subgrid=sg)
         return False, None
 
     # -------------------------------------
 
     def plan(self, agents):
 
-        sg_paths = []
-        for a in agents:
-            sg_paths.append(
-                dijkstra(
-                    self.graph,
-                    self.locate(a["start"]),
-                    self.locate(a["goal"])
-                )
-            )
+        self.log(logging.INFO, "plan_start", agents=len(agents))
+
+        sg_paths = [dijkstra(self.graph,
+                             self.locate(a["start"]),
+                             self.locate(a["goal"])) for a in agents]
 
         global_paths = [[] for _ in agents]
         cur_pos = [a["start"] for a in agents]
@@ -330,17 +357,20 @@ class HierarchicalLaCAM:
 
         for step in range(max_steps):
 
+            self.log(logging.DEBUG, "step", step=step)
+
             moved = set()
             groups = {}
 
             for i,p in enumerate(sg_paths):
                 if step < len(p):
-                    sg = p[step]
-                    groups.setdefault(sg, []).append(i)
+                    groups.setdefault(p[step], []).append(i)
 
             futures = []
 
             for sg, rids in groups.items():
+                self.log(logging.DEBUG, "subgrid",
+                         sg=sg, agents=len(rids))
 
                 priorities = {
                     rid: self.compute_priority(
@@ -351,23 +381,17 @@ class HierarchicalLaCAM:
 
                 rids.sort(key=lambda r: priorities[r], reverse=True)
 
-                if len(rids) > 50:
-                    rids = rids[:50]
+                x0,y0,_,_ = self.bounds(sg)
 
-                x0,y0,x1,y1 = self.bounds(sg)
-
-                local_agents = []
-                for rid in rids:
-                    sx,sy = cur_pos[rid]
-                    gx,gy = agents[rid]["goal"]
-
-                    gx = min(max(gx, x0), x1-1)
-                    gy = min(max(gy, y0), y1-1)
-
-                    local_agents.append({
-                        "start": (sx-x0, sy-y0),
-                        "goal": (gx-x0, gy-y0)
-                    })
+                local_agents = [
+                    {
+                        "start": (cur_pos[r][0]-x0, cur_pos[r][1]-y0),
+                        "goal": (
+                            min(max(agents[r]["goal"][0], x0), x0+self.SUB_W-1)-x0,
+                            min(max(agents[r]["goal"][1], y0), y0+self.SUB_H-1)-y0
+                        )
+                    } for r in rids
+                ]
 
                 futures.append((sg, rids, priorities,
                     self.executor.submit(self.solve_subgrid, sg, local_agents, step)
@@ -382,7 +406,6 @@ class HierarchicalLaCAM:
                 x0,y0,_,_ = self.bounds(sg)
 
                 for i, rid in enumerate(rids):
-
                     path = paths[i]
                     success = True
 
@@ -395,22 +418,23 @@ class HierarchicalLaCAM:
                             break
 
                     if not success:
+                        self.log(logging.DEBUG, "wait", agent=rid)
                         global_paths[rid].append(cur_pos[rid])
                         time_cur[rid] += 1
                         moved.add(rid)
                         continue
 
                     for dt,(lx,ly) in enumerate(path):
-                        gx,gy = lx+x0, ly+y0
-                        global_paths[rid].append((gx,gy))
+                        global_paths[rid].append((lx+x0, ly+y0))
 
                     time_cur[rid] += len(path)
                     cur_pos[rid] = global_paths[rid][-1]
                     moved.add(rid)
 
-            # ✅ CRITICAL FIX
+            # ✅ CRITICAL FIX (kept)
             for rid in range(len(agents)):
                 if rid not in moved:
+                    self.log(logging.DEBUG, "global_wait", agent=rid)
                     global_paths[rid].append(cur_pos[rid])
                     time_cur[rid] += 1
                     self.age[rid] += 1
@@ -418,5 +442,10 @@ class HierarchicalLaCAM:
         for i in range(len(global_paths)):
             if not global_paths[i]:
                 global_paths[i].append(agents[i]["start"])
+
+        self.log(logging.INFO, "plan_end",
+                 steps=max_steps,
+                 agents=len(agents),
+                 conflicts=len(self.conflict_heat))
 
         return True, global_paths
