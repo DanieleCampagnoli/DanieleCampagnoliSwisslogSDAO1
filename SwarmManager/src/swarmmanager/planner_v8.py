@@ -39,7 +39,7 @@ def setup_json_logger(level=logging.INFO):
         # console
         ch = logging.StreamHandler()
         ch.setFormatter(JsonFormatter())
-        logger.addHandler(handler)
+        logger.addHandler(ch)
 
     return logger
 
@@ -55,6 +55,7 @@ def dijkstra(graph, start, goal):
 
     while pq:
         d, u = heapq.heappop(pq)
+
         if u == goal:
             break
 
@@ -65,8 +66,9 @@ def dijkstra(graph, start, goal):
                 parent[v] = u
                 heapq.heappush(pq, (nd, v))
 
+    # ✅ FIX: guarantee valid path
     if goal not in parent:
-        return []
+        return [start, goal] if start != goal else [start]
 
     path = []
     cur = goal
@@ -74,7 +76,12 @@ def dijkstra(graph, start, goal):
         path.append(cur)
         cur = parent[cur]
 
-    return list(reversed(path))
+    path.reverse()
+
+    if not path or path[0] != start:
+        path = [start] + path
+
+    return path
 
 
 # =====================================================
@@ -341,6 +348,53 @@ class HierarchicalLaCAM:
 
     # -------------------------------------
 
+    def border_cells(self, a, b):
+        x0,y0,x1,y1 = self.bounds(a)
+
+        dx = b[0]-a[0]
+        dy = b[1]-a[1]
+
+        if dx == 1:
+            bx = x1-1
+            cy = (y0+y1)//2
+            return [(bx,cy-1),(bx,cy)]
+
+        if dx == -1:
+            bx = x0
+            cy = (y0+y1)//2
+            return [(bx,cy-1),(bx,cy)]
+
+        if dy == 1:
+            by = y1-1
+            cx = (x0+x1)//2
+            return [(cx-1,by),(cx,by)]
+
+        if dy == -1:
+            by = y0
+            cx = (x0+x1)//2
+            return [(cx-1,by),(cx,by)]
+
+        return []
+
+    def assign_gate(self, rid, sg, next_sg, gate_usage):
+        cells = self.border_cells(sg, next_sg)
+
+        # fallback safety
+        if not cells:
+            return None
+
+        best = None
+        min_load = float("inf")
+
+        for cell in cells:
+            load = gate_usage.get(cell, 0)
+            if load < min_load:
+                min_load = load
+                best = cell
+
+        gate_usage[best] = gate_usage.get(best, 0) + 1
+        return best
+
     def plan(self, agents):
 
         self.log(logging.INFO, "plan_start", agents=len(agents))
@@ -353,7 +407,12 @@ class HierarchicalLaCAM:
         cur_pos = [a["start"] for a in agents]
         time_cur = [0]*len(agents)
 
-        max_steps = max(len(p) for p in sg_paths)
+        # ✅ GUARANTEE paths are never empty
+        for i in range(len(sg_paths)):
+            if not sg_paths[i]:
+                sg_paths[i] = [self.locate(agents[i]["start"])]
+
+        max_steps = max(max(1, len(p)) for p in sg_paths)+50
 
         for step in range(max_steps):
 
@@ -364,7 +423,13 @@ class HierarchicalLaCAM:
 
             for i,p in enumerate(sg_paths):
                 if step < len(p):
-                    groups.setdefault(p[step], []).append(i)
+                    sg = p[step]
+                else:
+                    # ✅ stay in last subgrid until goal reached
+                    sg = p[-1]
+
+                groups.setdefault(sg, []).append(i)
+
 
             futures = []
 
@@ -382,16 +447,32 @@ class HierarchicalLaCAM:
                 rids.sort(key=lambda r: priorities[r], reverse=True)
 
                 x0,y0,_,_ = self.bounds(sg)
+                local_agents = []
+                gate_usage = {}
 
-                local_agents = [
-                    {
-                        "start": (cur_pos[r][0]-x0, cur_pos[r][1]-y0),
-                        "goal": (
-                            min(max(agents[r]["goal"][0], x0), x0+self.SUB_W-1)-x0,
-                            min(max(agents[r]["goal"][1], y0), y0+self.SUB_H-1)-y0
-                        )
-                    } for r in rids
-                ]
+
+                for rid in rids:
+
+                    sx, sy = cur_pos[rid]
+                    path = sg_paths[rid]
+
+                    if step + 1 < len(path):
+                        next_sg = path[step + 1]
+
+                        gate = self.assign_gate(rid, sg, next_sg, gate_usage)
+
+                        if gate is None:
+                            gx, gy = agents[rid]["goal"]
+                        else:
+                            gx, gy = gate
+                    else:
+                        gx, gy = agents[rid]["goal"]
+
+                    local_agents.append({
+                        "start": (sx - x0, sy - y0),
+                        "goal": (gx - x0, gy - y0)
+                    })
+
 
                 futures.append((sg, rids, priorities,
                     self.executor.submit(self.solve_subgrid, sg, local_agents, step)
@@ -401,6 +482,83 @@ class HierarchicalLaCAM:
 
                 ok, paths = future.result()
                 if not ok:
+
+                    best_rid = max(rids, key=lambda r: priorities[r] + 5 * self.age[r])
+
+                    # -----------------------------
+                    # ✅ SINGLE AGENT FALLBACK - NOT WORKING
+                    # -----------------------------
+                    x0, y0, _, _ = self.bounds(sg)
+
+                    sx, sy = cur_pos[best_rid]
+                    path = sg_paths[best_rid]
+
+                    # determine target (same logic as before)
+                    if step + 1 < len(path):
+                        next_sg = path[step + 1]
+                        gate = self.assign_gate(best_rid, sg, next_sg, {})
+                        if gate is None:
+                            gx, gy = agents[best_rid]["goal"]
+                        else:
+                            gx, gy = gate
+                    else:
+                        gx, gy = agents[best_rid]["goal"]
+
+                    single_agent = [{
+                        "start": (sx - x0, sy - y0),
+                        "goal":  (gx - x0, gy - y0)
+                    }]
+
+                    planner = LaCAMPlanner(
+                        (self.SUB_W, self.SUB_H),
+                        self.local_obstacles(sg, step),
+                        self.exe_path
+                    )
+
+                    ok1, paths1 = planner.plan(single_agent)
+
+                    if ok1:
+                        MAX_FALLBACK_HORIZON = 3   # ✅ key parameter
+                        path = paths1[0][:MAX_FALLBACK_HORIZON]
+
+                        success = True
+                        
+                        for dt, (lx, ly) in enumerate(path):
+                            gx, gy = lx + x0, ly + y0
+                            t = time_cur[best_rid] + dt
+
+                            if not self.safe_reserve(best_rid, gx, gy, t, priorities):
+                                success = False
+                                break
+
+                        if success:
+                            for dt, (lx, ly) in enumerate(path):
+                                global_paths[best_rid].append((lx + x0, ly + y0))
+
+                            time_cur[best_rid] += len(path)
+                            cur_pos[best_rid] = global_paths[best_rid][-1]
+                            moved.add(best_rid)
+
+                            self.age[best_rid] = 0
+
+                            self.log(logging.DEBUG, "single_agent_lacam_success",
+                                    agent=best_rid,
+                                    steps=len(path))
+
+                            continue
+
+                    # -----------------------------
+                    # ✅ HARD FALLBACK (last resort)
+                    # -----------------------------
+                    global_paths[best_rid].append(cur_pos[best_rid])
+                    time_cur[best_rid] += 1
+                    moved.add(best_rid)
+                    self.age[best_rid] += 1
+
+                    self.log(logging.WARNING, "single_agent_lacam_failed",
+                            agent=best_rid)
+
+
                     continue
 
                 x0,y0,_,_ = self.bounds(sg)

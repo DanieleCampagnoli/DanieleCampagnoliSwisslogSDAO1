@@ -191,10 +191,11 @@ class TestHierarchicalLaCAM(unittest.TestCase):
 
         # one robot will initially lose priority repeatedly
         agents = [
-            {"start": (0,0), "goal": (25,25)},   # long path
-            {"start": (1,0), "goal": (25,25)},
-            {"start": (2,0), "goal": (25,25)},
-            {"start": (3,0), "goal": (25,25)},
+
+        {"start": (0,0), "goal": (25,25)},
+        {"start": (1,0), "goal": (25,24)},
+        {"start": (2,0), "goal": (24,25)},
+        {"start": (3,0), "goal": (24,24)},
         ]
 
         ok, paths = planner.plan(agents)
