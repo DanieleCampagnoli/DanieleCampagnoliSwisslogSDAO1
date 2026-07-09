@@ -155,9 +155,9 @@ class PIBTPlanner:
 
         with open(path, "r") as f:
             text = f.read()
-
-        #if "solved=1" not in text:
-        #    return None
+        #at the moment it's not able to solve the problem completely 
+        if "solved=1" not in text:
+            return None
 
         lines = text.splitlines()
 
