@@ -74,7 +74,7 @@ class LaCAMPlanner:
                 "-i", scen_file,
                 "-N", str(len(agents)),
                 "-o", output_file,
-                "-t", "120"
+                "-t", "600"
             ]
 
         # ✅ run solver (safe)

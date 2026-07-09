@@ -94,7 +94,7 @@ We have provided a local Java tool (Validator.jar) so you can test your solution
 To test your output, open your terminal and run:
 
 Bash
-java -jar Validator.jar dataset_A.in dataset_A.out
+java -jar Validator.jar dataset_B.in dataset_B.out
 What the Validator does:
 
 Verifies no robots drove out of bounds.

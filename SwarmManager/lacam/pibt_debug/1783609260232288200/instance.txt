@@ -1,0 +1,13 @@
+map_file=c:/dev/workspaces/DanieleCampagnoliSwisslogSDAO1/SwarmManager/lacam/pibt_debug/1783609260232288200/map.map
+
+agents=1
+
+seed=1
+
+random_problem=0
+
+max_timestep=5000
+
+max_comp_time=120000
+
+0,0,4,4
