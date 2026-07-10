@@ -17,7 +17,7 @@ def main():
     warehouse = session.query(SwarmManagerWarehouse)\
     .filter(SwarmManagerWarehouse.id == 1)\
     .first()
-    DatasetConverter.to_file(session, warehouse, "dataset_B.out")
+    DatasetConverter.to_file(session, warehouse, "dataset_C.out")
 
 if __name__ == "__main__":
     main()

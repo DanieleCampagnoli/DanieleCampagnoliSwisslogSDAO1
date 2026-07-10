@@ -137,7 +137,7 @@ class PIBTPlanner:
 
             f.write("random_problem=0\n\n")
 
-            f.write("max_timestep=5000\n\n")
+            f.write("max_timestep=200000\n\n")
 
             f.write("max_comp_time=120000\n\n")
 
