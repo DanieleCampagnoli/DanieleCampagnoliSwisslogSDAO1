@@ -55,7 +55,7 @@ compiled locally and invoked from python as an external process
 LaCAM3  
 https://github.com/Kei18/lacam3
 compiled locally and invoked from python as an external process  
-
+# installation
 I committed the alreay complied c++ sources.
 I can you need to recompile them:  
 Install mingw-w64 https://www.mingw-w64.org/  
@@ -89,5 +89,18 @@ third_party/grid-pathfinding/graph/src/graph.cpp add in the include section
 ```
 #include <cstring>
 ```
+# notes on the project structure
+/db folder contains SQL lite db  
+/files contains in and out files  
+/lacam contains the exe files and DLL of the LaCAM project  
+/pibt2 contains the exe files and DLL of pibt2 project  
+/lacam3 contains the exe files and DLL for LaCAM3 project    
+/src/swarmmanager contains the python implementation   
+more important files:  
+main.py launch the full pipeline, from file conversion to visualization  
+main_visu_only.py launch only the visu, it's reading a SQL lite db file  
+main_export_only.py launch only the export in to the .out format required by the coding challenge.  
+planner to planner_v10 are various attempt to solve the problem  
+bo.py business objects, used by all other components and persisted in SQL Lite tables ( Onion Architecture with ORM objects not separated from Business Objects)
 
 
